@@ -1,103 +1,120 @@
+# Multi-Channel C2 Framework & Automated Host Assessor
 
-🛡️ The Mission
-# C2-Framework.
-A modular C2 Framework developed during my final year cyber project at KIIT, featuring DNS/GitHub communication channels, custom agent modules, and a dual GUI/CLI interface
--------------------------------------------------------------------------------------------
-This framework describes a modular Command and Control (C2) architecture designed to demonstrate how post-exploitation communication, cover networks, and automated host auditing operate. Below is a detailed breakdown of the system architecture, its communication channels, payload deployment mechanics, and defensive analysis considerations.
+A modular Command and Control (C2) framework developed as a final-year cybersecurity capstone project at **KIIT University**. The platform demonstrates modern defensive evasion strategies, resilient multi-channel covert communications (including Cloud APIs and DNS Tunneling), dynamic agent payload deployment, and automated target host vulnerability auditing.
 
-1. Multi-Channel C2 Mechanics
-A central challenge in network defense and red-teaming design is maintaining persistent communication with an agent when primary egress routes are monitored or restricted. This system employs three distinct egress strategies:
+---
 
-                            +--------------------------+
-                            |    C2 Controller (C)     |
-                            +------------+-------------+
-                                         |
-         +-------------------------------+-------------------------------+
-         |                               |                               |
-         v                               v                               v
-[Google Drive API]               [OneDrive API]                [DNS Tunnel (UDP 53)]
- HTTPS (Port 443)                HTTPS (Port 443)               TXT / A Query-Response
-         |                               |                               |
-         +-------------------------------+-------------------------------+
-                                         |
-                                         v
-                            +--------------------------+
-                            |   Victim Workstation     |
-                            |     (PowerShell)         |
-                            +--------------------------+
+## 📌 Executive Summary
 
-                            
+Modern enterprise networks deploy strict perimeter controls, network intrusion detection systems (NIDS), and egress filtering. Traditional adversary infrastructure relying on static IP addresses or unrated domains is quickly identified and blocked.
 
+This framework investigates how post-exploitation agents maintain persistent command-and-control channels by leveraging:
+1. **High-Trust Egress Pipe Abuse:** Interacting with trusted cloud services (Google Drive and Microsoft OneDrive APIs) over standard HTTPS (Port 443).
+2. **Covert Fallback Transport:** Encapsulating data within raw DNS queries over UDP Port 53 to bypass strict egress firewalls.
+3. **Automated Post-Exploitation Auditing:** Processing incoming system profiling data through automated local patch assessment engines (WES-NG) upon initial check-in.
 
-Channel A & B: Cloud Storage APIs (Google Drive & OneDrive)
-Mechanism: Rather than communicating directly with a custom server IP/domain, the agent uses legitimate cloud provider APIs as a proxy layer (often termed data pipe leverage or covert storage channels).
+---
 
-Operation:
+## 🏗️ System Architecture
 
-Commands: The C2 controller uploads tasking files (or metadata) to a dedicated directory in Google Drive or OneDrive using API tokens. The PowerShell agent periodically polls the API over standard HTTPS (Port 443) to read pending tasks.
+The architecture consists of a Linux-based C Controller infrastructure managing remote Windows targets executing PowerShell agent modules.
 
-Data Exfiltration: The agent writes execution output into local files and uploads them back to the cloud storage platform, where the controller retrieves them.
+```
+                            +-----------------------------------+
+                            |    C2 Controller (Linux Server)   |
+                            |   - CLI Interface / Module Engine |
+                            +-----------------+-----------------+
+                                              |
+         +------------------------------------+------------------------------------+
+         |                                    |                                    |
+         v                                    v                                    v
+[ Google Drive API ]                 [ OneDrive API ]                   [ Authoritative DNS ]
+  HTTPS (Port 443)                    HTTPS (Port 443)                 UDP Port 53 (A / TXT)
+         |                                    |                                    |
+         +------------------------------------+------------------------------------+
+                                              |
+                                              v
+                            +-----------------------------------+
+                            |     Victim Workstation Agent      |
+                            |       (PowerShell Execution)      |
+                            +-----------------------------------+
+```
 
-Security & Evasion Implications:
+---
 
-Since traffic is directed to legitimate domains (*.googleapis.com or *.microsoft.com), standard domain reputation filters and IP blocklists generally do not inspect or block the connections.
+## 📡 Communication Channel Mechanics
 
-Traffic inspection relies heavily on SSL/TLS decryption (TLS Inspection) and behavior-based monitoring (e.g., detecting unusual API invocation patterns or high-frequency uploads by non-standard binaries/scripts).
+### 1. Cloud Storage Channels (Google Drive & OneDrive)
+* **Concept:** Serves as a proxy layer between controller and agent. All network traffic originates from and terminates at legitimate cloud provider endpoints (`*.googleapis.com`, `*.microsoft.com`).
+* **Inbound Tasking:** The controller uploads tasking files or metadata via API tokens to dedicated directories. Agents periodically poll the endpoints over HTTPS to retrieve instructions.
+* **Outbound Exfiltration:** Agents execute instructions locally, aggregate results into structured files, and upload them back to cloud storage for controller retrieval.
+* **Evasion Impact:** Completely bypasses domain reputation checks and standard IP blocklists. Detection requires active TLS decryption and behavioral monitoring (e.g., unusual API call frequencies from non-standard binaries).
 
-Channel C: DNS Tunneling (UDP Port 53)
-Mechanism: DNS is a foundational network protocol that is rarely blocked outbound, as host systems require it to resolve domain names.
+### 2. DNS Tunneling Channel (UDP Port 53)
+* **Concept:** Uses standard host DNS resolution paths, which are rarely restricted outbound on internal networks.
+* **Inbound Tasking (TXT Records):** Agents request TXT records for attacker-controlled domains (e.g., `task.c2domain.com`). The controller's DNS service responds with encoded execution commands inside the TXT payload.
+* **Outbound Exfiltration (A Records):** Agent exfiltration data is chunked, Base64/Hex-encoded, and prepended as subdomains in rapid sequence A record queries (e.g., `<hex_data>.c2domain.com`). The controller intercepts incoming UDP 53 queries and reassembles the payload stream.
 
-Operation:
+---
 
-Inbound Tasks (TXT Records): The agent sends a DNS query for a TXT record under an attacker-controlled authoritative domain (e.g., task.c2domain.com). The controller’s custom DNS server responds with encoded data payload strings inside the TXT record response.
+## 📂 Codebase & Component Analysis
 
-Outbound Data (A/AAAA Records): The agent encodes system diagnostic data or command outputs (e.g., in Base64 or Hex) and prepends it as subdomains in rapid A record queries (e.g., 48656c6c6f.c2domain.com). The controller intercepts these incoming UDP 53 packets and reassembles the payload chunks into coherent data streams.
+### Server Infrastructure (`/server`)
+* **`c2_core.h`**: Global system definitions, session tracking models (`C2Agent`), data buffer layouts (`Chunk`), and live network connection states.
+* **`c2_modules.c`**: Multithreaded execution logic handling background listeners (`pthread`), raw DNS byte parsing, and `libcurl` integrations for OAuth2 cloud API interaction.
+* **`main.c`**: Operator Command Line Interface (CLI) loop for tracking target heartbeats, managing active sessions, and queuing interactive tasks.
 
-2. Server & Agent Component Analysis
-   
-Server Infrastructure (C2 Controller)
-c2_core.h: Serves as the global contract. It defines data structures like Chunk (to handle fragmented incoming data buffers) and C2Agent (to track active sessions, target identifiers, and last-seen timestamps/heartbeats).
+### Agent & Payload Engine (`/templates`)
+* **`template_drive.ps1` / `template_onedrive.ps1`**: PowerShell templates implementing REST API interactions and polling queues.
+* **`template_dns.ps1`**: Autonomous DNS query-response loop parsing incoming TXT payloads and executing local system commands.
+* **`script_discovery.ps1`**: Baseline host reconnaissance module injected into template headers during dynamic payload generation.
 
-c2_modules.c: Houses the heavy processing logic:
+---
 
-Multithreaded socket handlers (pthread) for concurrent UDP/DNS packet listening and HTTP queue management.
+## 🔍 Automated Host Vulnerability Pipeline
 
-Custom byte parsers to extract subdomains from raw DNS query bytes.
+Upon successful agent initialization, system diagnostic data is routed back to the controller and parsed automatically:
 
-Integration with libcurl to handle cloud API authentication (OAuth2 token refresh headers, REST requests).
+```
+[ Agent Host Profiling ] ──► [ Transport Stream ] ──► [ Reassembled: received_file.txt ]
+                                                                   │
+                                                                   v
+                                                     [ WES-NG Python Engine ]
+                                                                   │
+                                                                   v
+                                                    [ Missing Hotfixes / CVE List ]
+```
 
-main.c: Provides the operator interface (CLI) to select active targets, issue shell commands, monitor heartbeats, and switch between operational modes.
+1. **Telemetry Collection:** Host identification markers (Hostname, OS Version, Architecture, installed KB Hotfixes) are transmitted to the controller.
+2. **Subprocess Execution:** The controller forks a Python process invoking WES-NG (Windows Exploit Suggester - Next Generation):
+   ```bash
+   python3 wes.py received_file.txt --muc-lookup
+   ```
+3. **Assessment Output:** The output is matched against the Microsoft Update Catalog to highlight unpatched vulnerabilities and potential Local Privilege Escalation (LPE) paths without performing noisy network vulnerability scans on the target.
 
-Target Payload Generation
-Modular Templating: To minimize payload size and avoid hardcoding environment variables, the C2 server uses template files (template_drive.ps1, template_onedrive.ps1, template_dns.ps1).
+---
 
-Header Injection: During payload dynamic generation, the server prepends script_discovery.ps1 (a system profiling script that captures hostnames, OS version, architecture, and installed hotfixes) to the selected transport script to produce the final executable script (generated_agent*.ps1).
+## 🛡️ Defensive Analysis & Mitigation Strategies
 
-3. Automated Post-Exploitation Pipeline 
-   
-Once an agent connects and executes the initial profiling logic, the server automates local vulnerability assessment:
+To defend against the techniques demonstrated in this framework, security operations centers (SOC) should deploy:
 
-[Agent Profiling] ──> [Data Chunking] ──> [Reassembled to received_file.txt]
-                                                     │
-                                                     v
-                                      [WES-NG Python Parser]
-                                                     │
-                                                     v
-                                     [Missing Hotfixes / CVE List]
-                                     
-Data Reassembly: Reconstructed profiling information from incoming DNS or HTTPS streams is written to a localized file (received_file.txt).
+| Attack Surface | Primary Detection Vector | Defensive Countermeasure |
+| :--- | :--- | :--- |
+| **Cloud API Abuses** | Process-to-network telemetry anomalies | Monitor un-signed process invocations (`powershell.exe`) interacting with REST API endpoints; implement SSL/TLS inspection. |
+| **DNS Tunneling** | High volume of subdomains under single TLD | Deploy DNS entropy analytics, flag unusually large TXT responses, and restrict outbound Port 53 traffic exclusively to internal resolvers. |
+| **Host Reconnaissance** | Process creation alerts for native discovery tools | Audit execution of system profiling commands (`systeminfo`, `wmic`) spawned by non-standard parent shells. |
 
-Process Invocation: The C2 controller spawns a Python subprocess executing WES-NG (wes.py), a tool that parses system systeminfo output against a local database of known Windows vulnerabilities.
+---
 
--muc-lookup Parameter: Queries the Microsoft Update Catalog to cross-reference missing patches against known CVEs and privilege escalation vectors, giving the operator immediate insight into potential local privilege escalation (LPE) paths without relying on active network scans on the victim network.
+## 🚀 Architectural Refactoring & Future Work
 
-4. Software Architecture & Refactoring Considerations
-   
-The document notes that the baseline server implementation is primarily procedural and monolithic due to the fast-paced nature of proof-of-concept development. Key areas typically addressed in code refactoring for production-grade or robust academic frameworks include:
+As an academic Proof of Concept (PoC), several areas were identified for future production-level refactoring:
+- [ ] **Transport Layer Abstraction:** Decouple transport drivers using C function pointers to allow plug-and-play addition of new egress protocols (e.g., WebSockets, ICMP).
+- [ ] **Concurrency & Thread Safety:** Transition global array session tracking to mutex-protected thread-safe data structures.
+- [ ] **Dynamic Memory Management:** Replace fixed static allocation buffers (`BUF_SIZE`) with dynamic memory allocations guarded by explicit boundary checks.
 
-Abstraction of Transport Layer: Implementing an abstract channel interface (or function pointers in C) so that adding new transport channels (e.g., Slack API, WebSockets, ICMP) requires zero modifications to the core CLI or execution loop.
+---
 
-State Management & Concurrency Safety: Replacing global array-based session tracking with thread-safe data structures (e.g., mutex-protected hash maps or linked lists) to prevent race conditions during heavy agent traffic.
+## ⚠️ Disclaimer
 
-Input Sanitization & Buffer Protection: Transitioning from fixed array allocations (BUF_SIZE) and direct file-stream operations to dynamic memory management with strict boundary checks to prevent memory corruption vulnerabilities within the listener binaries.
-                            
+*This software was developed solely for academic research, educational demonstrations, and authorized security evaluation as part of a final-year project at KIIT University. Misuse of this software to target systems without explicit prior authorization is illegal.*
