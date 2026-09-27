@@ -26,6 +26,8 @@ A central challenge in network defense and red-teaming design is maintaining per
                             |     (PowerShell)         |
                             +--------------------------+
 
+                            
+
 
 Channel A & B: Cloud Storage APIs (Google Drive & OneDrive)
 Mechanism: Rather than communicating directly with a custom server IP/domain, the agent uses legitimate cloud provider APIs as a proxy layer (often termed data pipe leverage or covert storage channels).
